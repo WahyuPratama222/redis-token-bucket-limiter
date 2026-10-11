@@ -1,0 +1,55 @@
+name: redis-token-bucket-limiter-dev
+
+# Shared settings for both app instances, so we don't repeat them
+x-limiter-app: &limiter-app
+  build:
+    context: .
+    dockerfile: Dockerfile.dev
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - redis-token-bucket-limiter-net-dev
+
+services:
+  # Server A
+  app-dev-a:
+    <<: *limiter-app
+    container_name: redis-token-bucket-limiter-app-dev-a
+    environment:
+      - PORT=3001
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - '3001:3001'
+
+  # Server B
+  app-dev-b:
+    <<: *limiter-app
+    container_name: redis-token-bucket-limiter-app-dev-b
+    environment:
+      - PORT=3002
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - '3002:3002'
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-token-bucket-limiter-dev
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_token_bucket_limiter_dev_data:/data
+    healthcheck:
+      test: [ 'CMD', 'redis-cli', 'ping' ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - redis-token-bucket-limiter-net-dev
+volumes:
+  redis_token_bucket_limiter_dev_data:
+
+networks:
+  redis-token-bucket-limiter-net-dev:
