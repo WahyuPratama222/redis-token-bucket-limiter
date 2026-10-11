@@ -1,0 +1,14 @@
+# dependencies are installed fresh inside the image by npm ci
+node_modules
+
+# the image compiles its own build
+dist
+
+# local-only files that should never be baked into the image
+.env
+*.log
+
+# not needed to build or run the app
+results
+scripts
+.git

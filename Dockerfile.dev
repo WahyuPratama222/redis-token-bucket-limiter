@@ -1,0 +1,16 @@
+FROM node:22-alpine
+
+WORKDIR /app
+ENV NODE_ENV=development
+
+# 1. Copy dependency files first to maximize the Docker cache layer
+COPY package*.json ./
+RUN npm ci
+
+# 2. Copy the rest of the source code and compile it once;
+#    both containers run this same build
+COPY . .
+RUN npm run build
+
+# PORT is set per container in docker-compose
+CMD ["node", "dist/main"]
