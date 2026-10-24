@@ -1,11 +1,11 @@
 // Token bucket executed atomically inside Redis.
 // KEYS[1] = bucket key
 // ARGV[1] = capacity, ARGV[2] = refill rate (tokens per second)
-// Returns { allowed (1/0), tokens as read before taking, tokens left after taking }
+// Returns { allowed (1/0), tokens as read before taking, tokens left, seconds until next token }
 export const TOKEN_BUCKET_SCRIPT = `
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
-
+docker compose -f docker-compose.dev.yml logs app-dev-a
 -- Use the Redis clock so every app server agrees on the time
 local t = redis.call('TIME')
 local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
@@ -27,15 +27,19 @@ local elapsed = math.max(0, now - ts)
 tokens = math.min(capacity, tokens + elapsed * refill_rate)
 
 local allowed = 0
+local retry = 0
 if tokens >= 1 then
   tokens = tokens - 1
   allowed = 1
+else
+  -- Time needed to accumulate the missing part of one token
+  retry = (1 - tokens) / refill_rate
 end
 
 redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
 -- Let idle buckets expire so they don't pile up in memory
 redis.call('EXPIRE', KEYS[1], math.ceil(capacity / refill_rate) * 2)
 
--- Numbers with decimals would be truncated by Redis, so send the leftover as text
-return { allowed, seen, string.format('%.2f', tokens) }
+-- Numbers with decimals would be truncated by Redis, so send them as text
+return { allowed, seen, string.format('%.2f', tokens), string.format('%.2f', retry) }
 `;

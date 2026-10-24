@@ -2,8 +2,9 @@ import { Controller, Get, HttpException, HttpStatus, Logger, Query } from '@nest
 import type { TakeResult } from './limiter.types';
 import { LuaLimiter } from './lua/lua.limiter';
 import { NaiveLimiter } from './naive/naive.limiter';
+import { RateLimit } from './rate-limit/rate-limit.decorator';
 
-// Demo endpoints used only for the load test; the reusable part will be the Guard later
+// Demo endpoints used only for the load test and the guard example
 @Controller()
 export class LimiterController {
   private readonly logger = new Logger('Limiter');
@@ -43,5 +44,12 @@ export class LimiterController {
   @Get('lua')
   lua(@Query('user') user = 'user1') {
     return this.handle('lua', user, (key) => this.luaLimiter.takeToken(key));
+  }
+
+  // GET /guarded: no limiter code here, the decorator + guard do all the work
+  @RateLimit({ capacity: 3, refillPerSec: 1 / 10 })
+  @Get('guarded')
+  guarded() {
+    return { ok: true };
   }
 }
