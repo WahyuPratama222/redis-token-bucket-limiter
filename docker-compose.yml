@@ -1,0 +1,51 @@
+name: redis-token-bucket-limiter
+
+x-limiter-app: &limiter-app
+  image: ghcr.io/wahyupratama222/redis-token-bucket-limiter:latest
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - redis-token-bucket-limiter-net
+
+services:
+  # Server A
+  app-a:
+    <<: *limiter-app
+    container_name: redis-token-bucket-limiter-app-a
+    environment:
+      PORT: ${APP_A_PORT:-3001}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '${APP_A_PORT:-3001}:${APP_A_PORT:-3001}'
+
+  # Server B
+  app-b:
+    <<: *limiter-app
+    container_name: redis-token-bucket-limiter-app-b
+    environment:
+      PORT: ${APP_B_PORT:-3002}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '${APP_B_PORT:-3002}:${APP_B_PORT:-3002}'
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-token-bucket-limiter-redis
+    restart: unless-stopped
+    volumes:
+      - redis_token_bucket_limiter_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - redis-token-bucket-limiter-net
+
+volumes:
+  redis_token_bucket_limiter_data:
+
+networks:
+  redis-token-bucket-limiter-net:
