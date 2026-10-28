@@ -5,7 +5,7 @@
 export const TOKEN_BUCKET_SCRIPT = `
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
-docker compose -f docker-compose.dev.yml logs app-dev-a
+
 -- Use the Redis clock so every app server agrees on the time
 local t = redis.call('TIME')
 local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
