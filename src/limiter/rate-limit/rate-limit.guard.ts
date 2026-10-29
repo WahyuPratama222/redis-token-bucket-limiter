@@ -36,10 +36,12 @@ export class RateLimitGuard implements CanActivate {
     const result = await this.luaLimiter.takeToken(`rl:${route}:${req.ip}`, options);
 
     res.setHeader('X-RateLimit-Limit', options.capacity);
+    // floor() keeps the header honest: 0.996 tokens means 0 requests left
     res.setHeader('X-RateLimit-Remaining', Math.floor(result.left));
 
     if (!result.allowed) {
-      res.setHeader('Retry-After', Math.ceil(result.retryAfterSec ?? 1));
+      // A rejected client should always wait at least 1 second, never 0
+      res.setHeader('Retry-After', Math.max(1, Math.ceil(result.retryAfterSec ?? 1)));
       throw new HttpException('Too many requests', HttpStatus.TOO_MANY_REQUESTS); // HTTP 429
     }
     return true;
