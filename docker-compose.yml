@@ -17,6 +17,7 @@ services:
     environment:
       PORT: ${APP_A_PORT:-3001}
       REDIS_URL: redis://redis:6379
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports:
       - '${APP_A_PORT:-3001}:${APP_A_PORT:-3001}'
 
@@ -27,6 +28,7 @@ services:
     environment:
       PORT: ${APP_B_PORT:-3002}
       REDIS_URL: redis://redis:6379
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports:
       - '${APP_B_PORT:-3002}:${APP_B_PORT:-3002}'
 
