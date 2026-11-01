@@ -41,5 +41,6 @@ redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
 redis.call('EXPIRE', KEYS[1], math.ceil(capacity / refill_rate) * 2)
 
 -- Numbers with decimals would be truncated by Redis, so send them as text
-return { allowed, seen, string.format('%.2f', tokens), string.format('%.2f', retry) }
+-- Use 6 decimals so rounding can't turn 0.996 into 1.00
+return { allowed, seen, string.format('%.6f', tokens), string.format('%.6f', retry) }
 `;

@@ -4,15 +4,18 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
-import type { RateLimitOptions } from '../limiter.types';
+import type { RateLimitOptions, TakeResult } from '../limiter.types';
 import { LuaLimiter } from '../lua/lua.limiter';
 import { RATE_LIMIT_KEY } from './rate-limit.decorator';
 
 @Injectable()
 export class RateLimitGuard implements CanActivate {
+  private readonly logger = new Logger(RateLimitGuard.name);
+
   constructor(
     private readonly reflector: Reflector,
     private readonly luaLimiter: LuaLimiter,
@@ -33,13 +36,24 @@ export class RateLimitGuard implements CanActivate {
 
     // One bucket per route per client IP; the client cannot choose its own identity
     const route = `${context.getClass().name}.${context.getHandler().name}`;
-    const result = await this.luaLimiter.takeToken(`rl:${route}:${req.ip}`, options);
+
+    let result: TakeResult;
+    try {
+      result = await this.luaLimiter.takeToken(`rl:${route}:${req.ip}`, options);
+    } catch (err) {
+      // Fail open: if Redis is down, let the request through instead of blocking everyone.
+      // For sensitive routes (e.g. login) failing closed would be the safer choice.
+      this.logger.warn(`Rate limiter unavailable, skipping check: ${String(err)}`);
+      return true;
+    }
 
     res.setHeader('X-RateLimit-Limit', options.capacity);
+    // floor() keeps the header honest: 0.996 tokens means 0 requests left
     res.setHeader('X-RateLimit-Remaining', Math.floor(result.left));
 
     if (!result.allowed) {
-      res.setHeader('Retry-After', Math.ceil(result.retryAfterSec ?? 1));
+      // A rejected client should always wait at least 1 second, never 0
+      res.setHeader('Retry-After', Math.max(1, Math.ceil(result.retryAfterSec ?? 1)));
       throw new HttpException('Too many requests', HttpStatus.TOO_MANY_REQUESTS); // HTTP 429
     }
     return true;
