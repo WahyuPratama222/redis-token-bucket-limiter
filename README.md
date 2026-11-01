@@ -1,124 +1,248 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+<div align="center">
+  <h1>🪣 Redis Token Bucket Limiter</h1>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+  <p>
+    <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" />
+    <img src="https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white" />
+    <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
+    <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" />
+    <img src="https://img.shields.io/badge/Lua-2C2D72?style=for-the-badge&logo=lua&logoColor=white" />
+    <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
+    <img src="https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white" />
+  </p>
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+  <p>
+    <strong>Eksperimen distributed rate limiter (token bucket) dengan Redis + Lua di NestJS</strong>
+  </p>
+</div>
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 🌟 Overview
 
-## Project setup
+Proyek riset kecil untuk menjawab satu pertanyaan: **kenapa rate limiter yang "baca lalu tulis" bocor saat ada lebih dari satu server, dan bagaimana Redis + Lua memperbaikinya?**
 
-```bash
-$ npm install
-```
+Repo ini menjalankan **dua server NestJS** di depan **satu Redis**, lalu membandingkan dua implementasi token bucket dengan aturan yang sama persis:
 
-## Compile and run the project
+- **Naif**: perintah Redis biasa (`HMGET`, hitung di aplikasi, `HSET`).
+- **Lua**: seluruh logika dijalankan atomik di dalam Redis lewat satu script.
 
-```bash
-# development
-$ npm run start
+Sebuah decorator `@RateLimit()` dan guard juga disertakan sebagai contoh pemakaian di route nyata.
 
-# watch mode
-$ npm run start:dev
+---
 
-# production mode
-$ npm run start:prod
-```
+## 🔬 Masalahnya
 
-## Run tests
+Pada versi naif, ada dua sumber bug saat dua server bekerja bersamaan:
 
-```bash
-# unit tests
-$ npm run test
+1. **Race condition.** Ada celah antara membaca dan menulis token.
 
-# e2e tests
-$ npm run test:e2e
+| Langkah | Server A         | Server B         |
+| ------- | ---------------- | ---------------- |
+| 1       | baca tokens = 1  | baca tokens = 1  |
+| 2       | hitung → lolos   | hitung → lolos   |
+| 3       | tulis tokens = 0 | tulis tokens = 0 |
 
-# test coverage
-$ npm run test:cov
-```
+Dua request lolos padahal hanya ada satu token.
 
-## Deployment
+2. **Jam yang berbeda.** Refill dihitung dari `Date.now()` di tiap server, sehingga selisih jam antarserver ikut memengaruhi hasil.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## 💡 Solusinya
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Seluruh langkah (baca, refill, ambil token, tulis ulang) dijalankan dalam **satu script Lua**. Redis mengeksekusi script tanpa interupsi, jadi tidak ada celah di antara baca dan tulis. Waktu diambil dari `redis.call('TIME')`, sehingga semua server memakai jam yang sama. Script didaftarkan sekali lewat `defineCommand` ioredis, dan pemanggilan berikutnya hanya mengirim hash-nya (`EVALSHA`).
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+---
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## 📊 Hasil Eksperimen
 
-## Observability
+Setiap ronde mengirim 100 request paralel (bergantian ke server A dan B) ke bucket berkapasitas 5.
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+| Implementasi | Request yang lolos (dari 100)        |
+| ------------ | ------------------------------------ |
+| Naif         | 11 (dan 100 pada beban yang sangat rapat) |
+| Lua          | **5**, selalu tepat                  |
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+> Angka naif bervariasi tiap ronde karena bergantung pada waktu. Yang konsisten: naif meloloskan lebih dari kapasitas, Lua tidak pernah.
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project:
+Jalankan sendiri:
 
 ```bash
-$ npm install @nestjs/observe
+# 5 rounds against the production compose (default)
+./scripts/compare.sh 5
+
+# against the dev compose instead
+COMPOSE_FILE=docker-compose.dev.yml ./scripts/compare.sh 3
 ```
 
-Then follow the [setup guide](https://docs.nestjs.com/observability/overview) - it takes a single import and an app key.
+---
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+## 🛠️ Tech Stack
 
-## Resources
+| Kategori         | Teknologi                          |
+| ---------------- | ---------------------------------- |
+| Framework        | NestJS 12 (TypeScript), Node.js 22 |
+| Redis client     | ioredis                            |
+| Penyimpanan      | Redis 7 + Lua script               |
+| Linter           | oxlint                             |
+| Containerization | Docker, Docker Compose             |
+| CI/CD            | GitHub Actions → GHCR              |
 
-Check out a few resources that may come in handy when working with NestJS:
+---
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## ⚙️ Environment Configuration
 
-## Support
+Copy `.env.example` menjadi `.env`:
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```bash
+cp .env.example .env
+```
 
-## Stay in touch
+| Variabel                          | Deskripsi                                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `APP_A_PORT` / `APP_B_PORT`       | Port host untuk server A dan B (default `3001` dan `3002`)                                              |
+| `REDIS_PORT`                      | Port host Redis, hanya untuk compose dev                                                                |
+| `TRUST_PROXY`                     | `true` hanya jika aplikasi berjalan di belakang reverse proxy yang kamu kendalikan (default `false`)    |
+| `PORT` / `REDIS_URL`              | Hanya dibaca saat aplikasi dijalankan di luar Docker (`node --env-file=.env dist/main`)                 |
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+> ⚠️ **Soal `TRUST_PROXY`:** jika menyala tanpa proxy sungguhan di depan aplikasi, klien bisa memalsukan header `X-Forwarded-For` dan lolos dari limiter. Biarkan `false` kecuali ada proxy.
 
-## License
+---
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## 🚀 Cara Menjalankan
+
+Kedua mode memakai port host yang sama (`3001`, `3002`). Jalankan **satu mode saja**, atau `docker compose down` dulu sebelum berpindah.
+
+### Mode A — Docker Development (build lokal)
+
+```bash
+git clone https://github.com/WahyuPratama222/redis-token-bucket-limiter.git
+cd redis-token-bucket-limiter
+cp .env.example .env
+
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+Dua server berjalan di `http://localhost:3001` dan `http://localhost:3002`, keduanya memakai satu Redis. Setelah mengubah kode, jalankan lagi dengan `--build`.
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+### Mode B — Docker Production (image dari GHCR)
+
+Menjalankan image yang dibangun oleh CI, untuk memverifikasinya secara lokal.
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+```bash
+docker compose down
+```
+
+---
+
+## 🔌 Endpoint
+
+| Method | Endpoint              | Kegunaan                                                                                      |
+| ------ | --------------------- | --------------------------------------------------------------------------------------------- |
+| GET    | `/naive?user=user1`   | Limiter versi naif (kapasitas 5, isi ulang 1 token per 60 detik)                              |
+| GET    | `/lua?user=user1`     | Limiter versi Lua (aturan sama persis dengan `/naive`)                                        |
+| GET    | `/guarded`            | Contoh `@RateLimit({ capacity: 3, refillPerSec: 1 / 10 })` lewat guard, per route per IP      |
+
+Respons sukses `200`, jika jatah habis `429 Too Many Requests`. Khusus `/guarded`, header berikut ikut dikirim:
+
+| Header                  | Arti                                                                  |
+| ----------------------- | --------------------------------------------------------------------- |
+| `X-RateLimit-Limit`     | Kapasitas bucket                                                      |
+| `X-RateLimit-Remaining` | Sisa jatah, dibulatkan ke bawah                                       |
+| `Retry-After`           | Detik yang harus ditunggu (dibulatkan ke atas, minimal 1), saat `429` |
+
+Memakai decorator pada route lain:
+
+```typescript
+@RateLimit({ capacity: 5, refillPerSec: 1 / 60 })
+@Get('products')
+products() {
+  return [];
+}
+```
+
+---
+
+## 🧠 Catatan Desain
+
+- **Fail-open.** Jika Redis mati, guard meloloskan request dan mencatat warning, supaya matinya limiter tidak mematikan API. Untuk endpoint sensitif (misalnya login), fail-closed lebih aman, dan perilaku ini perlu diubah.
+- **Pembulatan yang jujur.** Token disimpan sebagai pecahan. `Remaining` dibulatkan ke bawah dan `Retry-After` ke atas, jadi header tidak pernah lebih optimistis dari kenyataan.
+- **Identitas klien.** Kunci bucket `rl:<route>:<ip>`. Di belakang proxy, nyalakan `TRUST_PROXY` agar `req.ip` berisi IP klien asli, bukan IP proxy.
+- **Kegagalan cepat.** Klien Redis memakai `maxRetriesPerRequest: 1`, jadi saat Redis mati request tidak menggantung lama sebelum jatuh ke jalur fail-open.
+
+---
+
+## 📁 Project Structure
+
+```
+redis-token-bucket-limiter/
+├── .github/workflows/        # CI/CD (GitHub Actions)
+├── scripts/
+│   └── compare.sh            # Perbandingan naif vs Lua
+├── src/
+│   ├── limiter/
+│   │   ├── naive/            # Limiter naif (HMGET + HSET)
+│   │   ├── lua/              # Limiter Lua + script token bucket
+│   │   ├── rate-limit/       # Decorator @RateLimit dan guard
+│   │   ├── limiter.controller.ts
+│   │   ├── limiter.module.ts
+│   │   └── limiter.types.ts
+│   ├── redis/                # Modul Redis global (ioredis)
+│   ├── app.module.ts
+│   └── main.ts
+├── Dockerfile                # Image production
+├── Dockerfile.dev            # Image development
+├── docker-compose.yml        # Production (image dari GHCR)
+├── docker-compose.dev.yml    # Development (build lokal)
+└── .env.example
+```
+
+---
+
+## ⚡ CI/CD
+
+GitHub Actions menjalankan job `build-and-test` (install dependency, build, test) lalu `build-and-push`, yang mendorong image ke **GitHub Container Registry**:
+
+```bash
+docker pull ghcr.io/wahyupratama222/redis-token-bucket-limiter:latest
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### Perubahan kode tidak terlihat di container dev
+
+Compose dev tidak memakai bind mount; kode disalin saat build. Jalankan ulang dengan build:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+### Limiter terasa tidak membatasi
+
+Kemungkinan Redis tidak terjangkau dan guard sedang fail-open. Cek log aplikasi untuk baris `Rate limiter unavailable`.
+
+### `port is already allocated`
+
+Compose dev dan production memakai port host yang sama. Matikan salah satu dengan `docker compose down`, atau ubah `APP_A_PORT` dan `APP_B_PORT` di `.env`.
+
+---
+
+<div align="center">
+  <sub>Dibuat dan dikembangkan oleh <strong>Wahyu Pratama</strong></sub>
+
+<br /><br />
+
+<a href="https://github.com/WahyuPratama222"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" /></a>
+<a href="https://www.linkedin.com/in/wahyu-pratama-ptm"><img src="https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" /></a>
+
+</div>
